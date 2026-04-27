@@ -233,21 +233,27 @@ with f5:
 
 
 # ── Filtrage ───────────────────────────────────────────────────────────────────
-def chevauche(r):
+def filtre_chambres(r):
     ch_min = r["nombre_chambres"] if pd.notna(r["nombre_chambres"]) else None
     ch_max = r["nombre_chambres_max"] if pd.notna(r["nombre_chambres_max"]) else ch_min
+
     if ch_min is None:
         return False
-    return ch_min <= ch_range[1] and ch_max >= ch_range[0]
+
+    return ch_min >= ch_range[0] and ch_max <= ch_range[1]
 
 
 dff = df.copy()
+
 if not dff.empty and sel_secteur != "Tous":
     dff = dff[dff["secteurs"].str.contains(sel_secteur, na=False)]
+
 if not dff.empty:
-    dff = dff[dff.apply(chevauche, axis=1)]
+    dff = dff[dff.apply(filtre_chambres, axis=1)]
+
 if not dff.empty:
     dff = dff[(dff["budget"] >= budget_range[0]) & (dff["budget"] <= budget_range[1])]
+
 dff = (
     dff.sort_values(tri_col, ascending=(tri_ordre == "Croissant"))
     if not dff.empty
