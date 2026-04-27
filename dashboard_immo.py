@@ -191,32 +191,35 @@ with f1:
     sel_secteur = st.selectbox("Secteur", sect_opts)
 
 with f2:
-    chambres_min_valides = df["nombre_chambres"].dropna()
-    chambres_max_valides = df["nombre_chambres_max"].dropna()
+    chambres_min_valides = pd.to_numeric(
+        df["nombre_chambres"], errors="coerce"
+    ).dropna()
+    chambres_max_valides = pd.to_numeric(
+        df["nombre_chambres_max"], errors="coerce"
+    ).dropna()
 
     if len(chambres_min_valides) > 0:
-        ch_min = int(chambres_min_valides.min())
+        ch_min_slider = int(chambres_min_valides.min())
 
         if len(chambres_max_valides) > 0:
-            ch_max = int(max(chambres_min_valides.max(), chambres_max_valides.max()))
+            ch_max_slider = int(
+                max(chambres_min_valides.max(), chambres_max_valides.max())
+            )
         else:
-            ch_max = int(chambres_min_valides.max())
-
-        if ch_min == ch_max:
-            ch_max += 1
+            ch_max_slider = int(chambres_min_valides.max())
 
         ch_range = st.slider(
             "Fourchette de chambres",
-            min_value=ch_min,
-            max_value=ch_max,
-            value=(ch_min, ch_max),
+            min_value=ch_min_slider,
+            max_value=ch_max_slider,
+            value=(ch_min_slider, ch_max_slider),
             step=1,
         )
     else:
         ch_range = (1, 10)
 
 with f3:
-    budget_valides = df["budget"].dropna()
+    budget_valides = pd.to_numeric(df["budget"], errors="coerce").dropna()
     pmin = int(budget_valides.min()) if len(budget_valides) > 0 else 0
     pmax = int(budget_valides.max()) if len(budget_valides) > 0 else 100000
     if pmin == pmax:
@@ -234,13 +237,16 @@ with f5:
 
 # ── Filtrage ───────────────────────────────────────────────────────────────────
 def filtre_chambres(r):
-    ch_min = r["nombre_chambres"] if pd.notna(r["nombre_chambres"]) else None
-    ch_max = r["nombre_chambres_max"] if pd.notna(r["nombre_chambres_max"]) else ch_min
+    ch_min = pd.to_numeric(r["nombre_chambres"], errors="coerce")
+    ch_max = pd.to_numeric(r["nombre_chambres_max"], errors="coerce")
 
-    if ch_min is None:
+    if pd.isna(ch_min):
         return False
 
-    return ch_min <= ch_range[1] and ch_max >= ch_range[0]
+    if pd.isna(ch_max):
+        ch_max = ch_min
+
+    return not (ch_max < ch_range[0] or ch_min > ch_range[1])
 
 
 dff = df.copy()
@@ -252,7 +258,10 @@ if not dff.empty:
     dff = dff[dff.apply(filtre_chambres, axis=1)]
 
 if not dff.empty:
-    dff = dff[(dff["budget"] >= budget_range[0]) & (dff["budget"] <= budget_range[1])]
+    dff = dff[
+        (pd.to_numeric(dff["budget"], errors="coerce") >= budget_range[0])
+        & (pd.to_numeric(dff["budget"], errors="coerce") <= budget_range[1])
+    ]
 
 dff = (
     dff.sort_values(tri_col, ascending=(tri_ordre == "Croissant"))
@@ -287,7 +296,9 @@ disp = dff[
     ]
 ].copy()
 
-disp["budget"] = disp["budget"].apply(lambda x: f"{x:,.0f} €")
+disp["budget"] = pd.to_numeric(disp["budget"], errors="coerce").apply(
+    lambda x: f"{x:,.0f} €" if pd.notna(x) else "—"
+)
 disp["acquereur_prenom"] = disp["acquereur_prenom"].fillna("—")
 disp["acquereur_nom"] = disp["acquereur_nom"].fillna("—")
 disp["acquereur_tel"] = disp["acquereur_tel"].fillna("—")
@@ -296,17 +307,14 @@ disp["acquereur_mail"] = disp["acquereur_mail"].fillna("—")
 
 def fmt_chambres(r):
     try:
-        ch_min = int(r["nombre_chambres"]) if pd.notna(r["nombre_chambres"]) else None
-        ch_max = (
-            int(r["nombre_chambres_max"])
-            if pd.notna(r["nombre_chambres_max"])
-            else None
-        )
-        if ch_min is None:
+        ch_min = pd.to_numeric(r["nombre_chambres"], errors="coerce")
+        ch_max = pd.to_numeric(r["nombre_chambres_max"], errors="coerce")
+
+        if pd.isna(ch_min):
             return "—"
-        if ch_max and ch_max != ch_min:
-            return f"{ch_min} à {ch_max}"
-        return str(ch_min)
+        if pd.notna(ch_max) and ch_max != ch_min:
+            return f"{int(ch_min)} à {int(ch_max)}"
+        return str(int(ch_min))
     except Exception:
         return "—"
 
@@ -456,34 +464,28 @@ with tab1:
 # ── Supprimer ─────────────────────────────────────────────────────────────────
 with tab2:
     if len(df) > 0:
-        opts = {
-            (
-                lambda r: (
-                    lambda ch_min, ch_max: (
-                        f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''} — {r['secteurs']} | {int(r['budget']):,} € | "
-                        f"{ch_min} à {ch_max} ch."
-                        if ch_max and ch_max != ch_min
-                        else f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''} — {r['secteurs']} | {int(r['budget']):,} € | {ch_min} ch."
-                    )
-                )(
-                    int(r["nombre_chambres"]) if pd.notna(r["nombre_chambres"]) else 0,
-                    (
-                        int(r["nombre_chambres_max"])
-                        if pd.notna(r["nombre_chambres_max"])
-                        else None
-                    ),
-                )
-            )(r).strip(): r["id"]
-            for _, r in df.iterrows()
-        }
+        opts = {}
+        for _, r in df.iterrows():
+            ch_min = pd.to_numeric(r["nombre_chambres"], errors="coerce")
+            ch_max = pd.to_numeric(r["nombre_chambres_max"], errors="coerce")
+
+            if pd.isna(ch_min):
+                chambres_txt = "—"
+            elif pd.notna(ch_max) and ch_max != ch_min:
+                chambres_txt = f"{int(ch_min)} à {int(ch_max)} ch."
+            else:
+                chambres_txt = f"{int(ch_min)} ch."
+
+            label = (
+                f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''} — "
+                f"{r['secteurs']} | {int(r['budget']):,} € | {chambres_txt}"
+            ).strip()
+            opts[label] = r["id"]
 
         sel = st.selectbox(
             "Acquéreur à supprimer", ["Choisir un acquéreur"] + list(opts.keys())
         )
-        if sel == "Choisir un acquéreur":
-            acq_id = None
-        else:
-            acq_id = opts[sel]
+        acq_id = None if sel == "Choisir un acquéreur" else opts[sel]
 
         if st.button("🗑️ Supprimer", type="primary"):
             if sel == "Choisir un acquéreur":
