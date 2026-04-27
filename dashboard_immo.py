@@ -240,7 +240,7 @@ def filtre_chambres(r):
     if ch_min is None:
         return False
 
-    return ch_min <= ch_range[1] and ch_max >= ch_range[0]
+    return ch_min >= ch_range[0] and ch_max <= ch_range[1]
 
 
 dff = df.copy()
