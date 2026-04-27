@@ -210,6 +210,10 @@ with f2:
         if ch_max_slider < ch_min_slider:
             ch_max_slider = ch_min_slider
 
+        # IMPORTANT : Streamlit n'aime pas les range sliders avec min == max
+        if ch_max_slider == ch_min_slider:
+            ch_max_slider = ch_min_slider + 1
+
         ch_range = st.slider(
             "Fourchette de chambres",
             min_value=ch_min_slider,
@@ -246,9 +250,6 @@ def filtre_chambres(r):
         return False
 
     if pd.isna(ch_max):
-        ch_max = ch_min
-
-    if ch_max < ch_min:
         ch_max = ch_min
 
     return not (ch_max < ch_range[0] or ch_min > ch_range[1])
@@ -314,14 +315,11 @@ def fmt_chambres(r):
     try:
         ch_min = pd.to_numeric(r["nombre_chambres"], errors="coerce")
         ch_max = pd.to_numeric(r["nombre_chambres_max"], errors="coerce")
-
         if pd.isna(ch_min):
             return "—"
-        if pd.isna(ch_max) or ch_max == ch_min:
-            return str(int(ch_min))
-        if ch_max < ch_min:
-            ch_max = ch_min
-        return f"{int(ch_min)} à {int(ch_max)}"
+        if pd.notna(ch_max) and ch_max != ch_min:
+            return f"{int(ch_min)} à {int(ch_max)}"
+        return str(int(ch_min))
     except Exception:
         return "—"
 
@@ -416,11 +414,11 @@ with tab1:
         if st.form_submit_button("✅ Ajouter l'acquéreur", use_container_width=True):
             if not sects_choisis:
                 st.error("Veuillez choisir au moins un secteur.")
-            elif budget_new is None:
+            elif not budget_new:
                 st.error("Le budget est obligatoire.")
-            elif nb_ch_new is None:
+            elif not nb_ch_new:
                 st.error("Le nombre de chambres minimum est obligatoire.")
-            elif nb_ch_max_new is not None and nb_ch_max_new < nb_ch_new:
+            elif nb_ch_max_new and nb_ch_max_new < nb_ch_new:
                 st.error("Le maximum doit être supérieur ou égal au minimum.")
             else:
                 conn = None
@@ -438,7 +436,7 @@ with tab1:
                         (
                             budget_new,
                             nb_ch_new,
-                            nb_ch_max_new if nb_ch_max_new is not None else None,
+                            nb_ch_max_new or None,
                             acq_prenom.strip() or None,
                             acq_nom.strip() or None,
                             acq_tel.strip() or None,
@@ -479,19 +477,14 @@ with tab2:
             if pd.isna(ch_min):
                 chambres_txt = "—"
             elif pd.notna(ch_max) and ch_max != ch_min:
-                if ch_max < ch_min:
-                    ch_max = ch_min
                 chambres_txt = f"{int(ch_min)} à {int(ch_max)} ch."
             else:
                 chambres_txt = f"{int(ch_min)} ch."
 
-            budget_val = pd.to_numeric(r["budget"], errors="coerce")
-            budget_txt = f"{int(budget_val):,} €" if pd.notna(budget_val) else "—"
-
-            nom_complet = (
-                f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''}".strip()
-            )
-            label = f"{nom_complet} — {r['secteurs']} | {budget_txt} | {chambres_txt}".strip()
+            label = (
+                f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''} — "
+                f"{r['secteurs']} | {int(r['budget']):,} € | {chambres_txt}"
+            ).strip()
             opts[label] = r["id"]
 
         sel = st.selectbox(
