@@ -201,12 +201,14 @@ with f2:
     if len(chambres_min_valides) > 0:
         ch_min_slider = int(chambres_min_valides.min())
 
+        max_candidates = [chambres_min_valides.max()]
         if len(chambres_max_valides) > 0:
-            ch_max_slider = int(
-                max(chambres_min_valides.max(), chambres_max_valides.max())
-            )
-        else:
-            ch_max_slider = int(chambres_min_valides.max())
+            max_candidates.append(chambres_max_valides.max())
+
+        ch_max_slider = int(max(max_candidates))
+
+        if ch_max_slider < ch_min_slider:
+            ch_max_slider = ch_min_slider
 
         ch_range = st.slider(
             "Fourchette de chambres",
@@ -244,6 +246,9 @@ def filtre_chambres(r):
         return False
 
     if pd.isna(ch_max):
+        ch_max = ch_min
+
+    if ch_max < ch_min:
         ch_max = ch_min
 
     return not (ch_max < ch_range[0] or ch_min > ch_range[1])
@@ -312,9 +317,11 @@ def fmt_chambres(r):
 
         if pd.isna(ch_min):
             return "—"
-        if pd.notna(ch_max) and ch_max != ch_min:
-            return f"{int(ch_min)} à {int(ch_max)}"
-        return str(int(ch_min))
+        if pd.isna(ch_max) or ch_max == ch_min:
+            return str(int(ch_min))
+        if ch_max < ch_min:
+            ch_max = ch_min
+        return f"{int(ch_min)} à {int(ch_max)}"
     except Exception:
         return "—"
 
@@ -409,11 +416,11 @@ with tab1:
         if st.form_submit_button("✅ Ajouter l'acquéreur", use_container_width=True):
             if not sects_choisis:
                 st.error("Veuillez choisir au moins un secteur.")
-            elif not budget_new:
+            elif budget_new is None:
                 st.error("Le budget est obligatoire.")
-            elif not nb_ch_new:
+            elif nb_ch_new is None:
                 st.error("Le nombre de chambres minimum est obligatoire.")
-            elif nb_ch_max_new and nb_ch_max_new < nb_ch_new:
+            elif nb_ch_max_new is not None and nb_ch_max_new < nb_ch_new:
                 st.error("Le maximum doit être supérieur ou égal au minimum.")
             else:
                 conn = None
@@ -431,7 +438,7 @@ with tab1:
                         (
                             budget_new,
                             nb_ch_new,
-                            nb_ch_max_new or None,
+                            nb_ch_max_new if nb_ch_max_new is not None else None,
                             acq_prenom.strip() or None,
                             acq_nom.strip() or None,
                             acq_tel.strip() or None,
@@ -472,14 +479,19 @@ with tab2:
             if pd.isna(ch_min):
                 chambres_txt = "—"
             elif pd.notna(ch_max) and ch_max != ch_min:
+                if ch_max < ch_min:
+                    ch_max = ch_min
                 chambres_txt = f"{int(ch_min)} à {int(ch_max)} ch."
             else:
                 chambres_txt = f"{int(ch_min)} ch."
 
-            label = (
-                f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''} — "
-                f"{r['secteurs']} | {int(r['budget']):,} € | {chambres_txt}"
-            ).strip()
+            budget_val = pd.to_numeric(r["budget"], errors="coerce")
+            budget_txt = f"{int(budget_val):,} €" if pd.notna(budget_val) else "—"
+
+            nom_complet = (
+                f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''}".strip()
+            )
+            label = f"{nom_complet} — {r['secteurs']} | {budget_txt} | {chambres_txt}".strip()
             opts[label] = r["id"]
 
         sel = st.selectbox(
