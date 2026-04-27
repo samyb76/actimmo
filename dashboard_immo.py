@@ -191,18 +191,27 @@ with f1:
     sel_secteur = st.selectbox("Secteur", sect_opts)
 
 with f2:
-    ch_vals = sorted(df["nombre_chambres"].dropna().astype(int).unique().tolist())
-    if len(ch_vals) >= 2:
+    chambres_min_valides = df["nombre_chambres"].dropna()
+    chambres_max_valides = df["nombre_chambres_max"].dropna()
+
+    if len(chambres_min_valides) > 0:
+        ch_min = int(chambres_min_valides.min())
+
+        if len(chambres_max_valides) > 0:
+            ch_max = int(max(chambres_min_valides.max(), chambres_max_valides.max()))
+        else:
+            ch_max = int(chambres_min_valides.max())
+
+        if ch_min == ch_max:
+            ch_max += 1
+
         ch_range = st.slider(
-            "Nombre de chambres",
-            min_value=ch_vals[0],
-            max_value=ch_vals[-1],
-            value=(ch_vals[0], ch_vals[-1]),
+            "Fourchette de chambres",
+            min_value=ch_min,
+            max_value=ch_max,
+            value=(ch_min, ch_max),
             step=1,
         )
-    elif len(ch_vals) == 1:
-        ch_range = (ch_vals[0], ch_vals[0])
-        st.info(f"Chambres : {ch_vals[0]}")
     else:
         ch_range = (1, 10)
 
