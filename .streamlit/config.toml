@@ -1,0 +1,12 @@
+[server]
+# Désactive la surveillance des fichiers → empêche les reruns automatiques
+fileWatcherType = "none"
+runOnSave = false
+
+[browser]
+# Désactive la collecte de statistiques (1 requête réseau en moins)
+gatherUsageStats = false
+
+[client]
+# Désactive le toolbar qui peut déclencher des reruns
+toolbarMode = "minimal"

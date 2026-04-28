@@ -11,7 +11,6 @@ def get_favicon():
     for name in ["logo.png", "logo.jpg", "logo.jpeg"]:
         if os.path.isfile(name):
             from PIL import Image
-
             return Image.open(name)
     return "🏠"
 
@@ -23,8 +22,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st.markdown(
-    """
+st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500&display=swap');
     html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
@@ -56,15 +54,12 @@ st.markdown(
     div[data-testid="collapsedControl"] { display: none; }
     .stButton > button { border-radius: 8px; font-weight: 500; }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 # ── Session state ──────────────────────────────────────────────────────────────
 for k, v in [("confirm_delete", None), ("confirm_delete_sect", None)]:
     if k not in st.session_state:
         st.session_state[k] = v
-
 
 # ── Pool de connexions (1 seule instance partagée) ─────────────────────────────
 # st.cache_resource = jamais recréé entre les reruns → minimise les réveils Neon
@@ -77,32 +72,26 @@ def get_pool():
         connect_timeout=10,
     )
 
-
 def get_conn():
     try:
         return get_pool().getconn()
     except Exception:
         return psycopg2.connect(st.secrets["db"]["dsn"], connect_timeout=10)
 
-
 def release_conn(conn):
     try:
         get_pool().putconn(conn)
     except Exception:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
+        try: conn.close()
+        except Exception: pass
 
 # ── Chargement données — TTL long pour limiter les requêtes BDD ────────────────
 # 1 seule requête SQL au lieu de 2 → moitié moins de réveils Neon
-@st.cache_data(ttl=300)  # Cache 5 minutes
+@st.cache_data(ttl=600)  # Cache 10 minutes
 def load_all():
     conn = get_conn()
     try:
-        biens = pd.read_sql(
-            """
+        biens = pd.read_sql("""
             SELECT
                 b.id, b.budget, b.nombre_chambres, b.nombre_chambres_max,
                 b.acquereur_prenom, b.acquereur_nom,
@@ -115,30 +104,23 @@ def load_all():
                      b.acquereur_prenom, b.acquereur_nom,
                      b.acquereur_tel, b.acquereur_mail, b.created_at
             ORDER BY b.id
-        """,
-            conn,
-        )
+        """, conn)
         secteurs = pd.read_sql("SELECT id, nom FROM secteurs ORDER BY nom", conn)
         return biens, secteurs
     finally:
         release_conn(conn)
 
-
 def refresh():
     load_all.clear()
     st.rerun()
-
 
 # ── Logo ───────────────────────────────────────────────────────────────────────
 for ext in ["logo.png", "logo.jpg", "logo.jpeg", "logo.svg"]:
     if os.path.isfile(ext):
         with open(ext, "rb") as f:
             data = base64.b64encode(f.read()).decode()
-        mime = (
-            "image/png"
-            if ext.endswith(".png")
-            else "image/jpeg" if ext.endswith((".jpg", ".jpeg")) else "image/svg+xml"
-        )
+        mime = "image/png" if ext.endswith(".png") else \
+               "image/jpeg" if ext.endswith((".jpg", ".jpeg")) else "image/svg+xml"
         header_content = f'<img src="data:{mime};base64,{data}" alt="Act\'Immobilier" style="max-height:200px;max-width:100%;object-fit:contain;" />'
         break
 else:
@@ -167,17 +149,9 @@ with f2:
     ch_max_vals = pd.to_numeric(df["nombre_chambres_max"], errors="coerce").dropna()
     if len(ch_min_vals) > 0:
         sl_min = int(ch_min_vals.min())
-        sl_max = int(
-            max(
-                ch_min_vals.max(),
-                ch_max_vals.max() if len(ch_max_vals) > 0 else ch_min_vals.max(),
-            )
-        )
-        if sl_min == sl_max:
-            sl_max += 1
-        ch_range = st.slider(
-            "Nombre de chambres", sl_min, sl_max, (sl_min, sl_max), step=1
-        )
+        sl_max = int(max(ch_min_vals.max(), ch_max_vals.max() if len(ch_max_vals) > 0 else ch_min_vals.max()))
+        if sl_min == sl_max: sl_max += 1
+        ch_range = st.slider("Nombre de chambres", sl_min, sl_max, (sl_min, sl_max), step=1)
     else:
         ch_range = (1, 10)
 
@@ -185,11 +159,8 @@ with f3:
     budget_vals = pd.to_numeric(df["budget"], errors="coerce").dropna()
     pmin = int(budget_vals.min()) if len(budget_vals) > 0 else 0
     pmax = int(budget_vals.max()) if len(budget_vals) > 0 else 100000
-    if pmin == pmax:
-        pmax += 1
-    budget_range = st.slider(
-        "Fourchette de budget (€)", pmin, pmax, (pmin, pmax), step=500
-    )
+    if pmin == pmax: pmax += 1
+    budget_range = st.slider("Fourchette de budget (€)", pmin, pmax, (pmin, pmax), step=500)
 
 with f4:
     tri_col = st.selectbox("Trier par", ["budget", "nombre_chambres", "secteurs"])
@@ -197,17 +168,13 @@ with f4:
 with f5:
     tri_ordre = st.radio("Ordre", ["Croissant", "Décroissant"], horizontal=True)
 
-
 # ── Filtrage ───────────────────────────────────────────────────────────────────
 def filtre_chambres(r):
     ch_min = pd.to_numeric(r["nombre_chambres"], errors="coerce")
     ch_max = pd.to_numeric(r["nombre_chambres_max"], errors="coerce")
-    if pd.isna(ch_min):
-        return False
-    if pd.isna(ch_max):
-        ch_max = ch_min
+    if pd.isna(ch_min): return False
+    if pd.isna(ch_max): ch_max = ch_min
     return not (ch_max < ch_range[0] or ch_min > ch_range[1])
-
 
 dff = df.copy()
 if not dff.empty and sel_secteur != "Tous":
@@ -221,174 +188,98 @@ if not dff.empty:
     dff = dff.sort_values(tri_col, ascending=(tri_ordre == "Croissant"))
 
 # ── KPI ────────────────────────────────────────────────────────────────────────
-st.markdown(
-    f"""<div class="kpi-card">
+st.markdown(f"""<div class="kpi-card">
     <div class="val">{len(dff)}</div>
     <div class="lbl">Acquéreurs affichés</div>
-</div>""",
-    unsafe_allow_html=True,
-)
+</div>""", unsafe_allow_html=True)
 
 # ── Tableau ────────────────────────────────────────────────────────────────────
-st.markdown(
-    '<div class="section-title">📋 Liste des acquéreurs</div>', unsafe_allow_html=True
-)
-
+st.markdown('<div class="section-title">📋 Liste des acquéreurs</div>', unsafe_allow_html=True)
 
 def fmt_chambres(r):
     try:
         ch_min = pd.to_numeric(r["nombre_chambres"], errors="coerce")
         ch_max = pd.to_numeric(r["nombre_chambres_max"], errors="coerce")
-        if pd.isna(ch_min):
-            return "—"
-        if pd.notna(ch_max) and ch_max != ch_min:
-            return f"{int(ch_min)} à {int(ch_max)}"
+        if pd.isna(ch_min): return "—"
+        if pd.notna(ch_max) and ch_max != ch_min: return f"{int(ch_min)} à {int(ch_max)}"
         return str(int(ch_min))
-    except Exception:
-        return "—"
+    except Exception: return "—"
 
-
-disp = dff[
-    [
-        "secteurs",
-        "budget",
-        "nombre_chambres",
-        "nombre_chambres_max",
-        "acquereur_prenom",
-        "acquereur_nom",
-        "acquereur_tel",
-        "acquereur_mail",
-    ]
-].copy()
-disp["budget"] = pd.to_numeric(disp["budget"], errors="coerce").apply(
-    lambda x: f"{x:,.0f} €" if pd.notna(x) else "—"
-)
-disp["nombre_chambres"] = disp.apply(fmt_chambres, axis=1)
+disp = dff[["secteurs","budget","nombre_chambres","nombre_chambres_max",
+            "acquereur_prenom","acquereur_nom","acquereur_tel","acquereur_mail"]].copy()
+disp["budget"]           = pd.to_numeric(disp["budget"], errors="coerce").apply(lambda x: f"{x:,.0f} €" if pd.notna(x) else "—")
+disp["nombre_chambres"]  = disp.apply(fmt_chambres, axis=1)
 disp["acquereur_prenom"] = disp["acquereur_prenom"].fillna("—")
-disp["acquereur_nom"] = disp["acquereur_nom"].fillna("—")
-disp["acquereur_tel"] = disp["acquereur_tel"].fillna("—")
-disp["acquereur_mail"] = disp["acquereur_mail"].fillna("—")
+disp["acquereur_nom"]    = disp["acquereur_nom"].fillna("—")
+disp["acquereur_tel"]    = disp["acquereur_tel"].fillna("—")
+disp["acquereur_mail"]   = disp["acquereur_mail"].fillna("—")
 disp.drop(columns=["nombre_chambres_max"], inplace=True)
-disp.rename(
-    columns={
-        "secteurs": "Secteur(s)",
-        "nombre_chambres": "Chambres",
-        "budget": "Budget",
-        "acquereur_prenom": "Prénom",
-        "acquereur_nom": "Nom",
-        "acquereur_tel": "Téléphone",
-        "acquereur_mail": "Mail",
-    },
-    inplace=True,
-)
+disp.rename(columns={
+    "secteurs": "Secteur(s)", "nombre_chambres": "Chambres", "budget": "Budget",
+    "acquereur_prenom": "Prénom", "acquereur_nom": "Nom",
+    "acquereur_tel": "Téléphone", "acquereur_mail": "Mail",
+}, inplace=True)
 
-st.dataframe(
-    disp,
-    use_container_width=True,
-    hide_index=True,
-    height=420,
+st.dataframe(disp, use_container_width=True, hide_index=True, height=420,
     column_config={
         "Secteur(s)": st.column_config.TextColumn(width="medium"),
-        "Budget": st.column_config.TextColumn(width="small"),
-        "Chambres": st.column_config.TextColumn(width="small"),
-        "Prénom": st.column_config.TextColumn(width="small"),
-        "Nom": st.column_config.TextColumn(width="small"),
-        "Téléphone": st.column_config.TextColumn(width="medium"),
-        "Mail": st.column_config.TextColumn(width="medium"),
-    },
-)
+        "Budget":     st.column_config.TextColumn(width="small"),
+        "Chambres":   st.column_config.TextColumn(width="small"),
+        "Prénom":     st.column_config.TextColumn(width="small"),
+        "Nom":        st.column_config.TextColumn(width="small"),
+        "Téléphone":  st.column_config.TextColumn(width="medium"),
+        "Mail":       st.column_config.TextColumn(width="medium"),
+    })
 st.caption(f"{len(dff)} acquéreur(s) affiché(s) sur {len(df)} au total")
 
 # ── CRUD ───────────────────────────────────────────────────────────────────────
-st.markdown(
-    '<div class="section-title">✏️ Gestion des données</div>', unsafe_allow_html=True
-)
+st.markdown('<div class="section-title">✏️ Gestion des données</div>', unsafe_allow_html=True)
 
-tab1, tab2, tab3 = st.tabs(
-    ["➕ Ajouter un acquéreur", "🗑️ Supprimer un acquéreur", "🏙️ Gérer les secteurs"]
-)
+tab1, tab2, tab3 = st.tabs(["➕ Ajouter un acquéreur", "🗑️ Supprimer un acquéreur", "🏙️ Gérer les secteurs"])
 
 # ── Ajouter ───────────────────────────────────────────────────────────────────
 with tab1:
     with st.form("add_acquereur", clear_on_submit=True):
         sect_map = dict(zip(secteurs_df["nom"], secteurs_df["id"]))
         c1, c2, c3 = st.columns(3)
-        with c1:
-            budget_new = st.number_input(
-                "Budget (€) *", min_value=0, step=500, value=None
-            )
-        with c2:
-            nb_ch_new = st.number_input(
-                "Chambres min *", min_value=1, max_value=20, step=1, value=None
-            )
-        with c3:
-            nb_ch_max_new = st.number_input(
-                "Chambres max",
-                min_value=1,
-                max_value=20,
-                step=1,
-                value=None,
-                help="Laisser vide si pas de maximum",
-            )
+        with c1: budget_new  = st.number_input("Budget (€) *", min_value=0, step=500, value=None)
+        with c2: nb_ch_new   = st.number_input("Chambres min *", min_value=1, max_value=20, step=1, value=None)
+        with c3: nb_ch_max_new = st.number_input("Chambres max", min_value=1, max_value=20, step=1, value=None, help="Laisser vide si pas de maximum")
 
-        sects_choisis = st.multiselect(
-            "Secteur(s) *",
-            options=list(sect_map.keys()),
-            placeholder="Choisir un ou plusieurs secteurs",
-        )
+        sects_choisis = st.multiselect("Secteur(s) *", options=list(sect_map.keys()), placeholder="Choisir un ou plusieurs secteurs")
 
         c4, c5 = st.columns(2)
-        with c4:
-            acq_prenom = st.text_input("Prénom acquéreur")
-        with c5:
-            acq_nom = st.text_input("Nom acquéreur")
+        with c4: acq_prenom = st.text_input("Prénom acquéreur")
+        with c5: acq_nom    = st.text_input("Nom acquéreur")
         c6, c7 = st.columns(2)
-        with c6:
-            acq_tel = st.text_input("Téléphone acquéreur")
-        with c7:
-            acq_mail = st.text_input("Mail acquéreur")
+        with c6: acq_tel  = st.text_input("Téléphone acquéreur")
+        with c7: acq_mail = st.text_input("Mail acquéreur")
 
         if st.form_submit_button("✅ Ajouter l'acquéreur", use_container_width=True):
-            if not sects_choisis:
-                st.error("Veuillez choisir au moins un secteur.")
-            elif not budget_new:
-                st.error("Le budget est obligatoire.")
-            elif not nb_ch_new:
-                st.error("Le nombre de chambres minimum est obligatoire.")
-            elif nb_ch_max_new and nb_ch_max_new < nb_ch_new:
-                st.error("Le maximum doit être supérieur ou égal au minimum.")
+            if not sects_choisis:               st.error("Veuillez choisir au moins un secteur.")
+            elif not budget_new:                st.error("Le budget est obligatoire.")
+            elif not nb_ch_new:                 st.error("Le nombre de chambres minimum est obligatoire.")
+            elif nb_ch_max_new and nb_ch_max_new < nb_ch_new: st.error("Le maximum doit être supérieur ou égal au minimum.")
             else:
                 conn = get_conn()
                 try:
                     cur = conn.cursor()
-                    cur.execute(
-                        """INSERT INTO biens
+                    cur.execute("""INSERT INTO biens
                         (budget, nombre_chambres, nombre_chambres_max,
                          acquereur_prenom, acquereur_nom, acquereur_tel, acquereur_mail)
                         VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                        (
-                            budget_new,
-                            nb_ch_new,
-                            nb_ch_max_new or None,
-                            acq_prenom.strip() or None,
-                            acq_nom.strip() or None,
-                            acq_tel.strip() or None,
-                            acq_mail.strip() or None,
-                        ),
-                    )
+                        (budget_new, nb_ch_new, nb_ch_max_new or None,
+                         acq_prenom.strip() or None, acq_nom.strip() or None,
+                         acq_tel.strip() or None, acq_mail.strip() or None))
                     new_id = cur.fetchone()[0]
                     for s in sects_choisis:
-                        cur.execute(
-                            "INSERT INTO acquereur_secteurs (acquereur_id, secteur_id) VALUES (%s,%s)",
-                            (new_id, sect_map[s]),
-                        )
-                    conn.commit()
-                    cur.close()
+                        cur.execute("INSERT INTO acquereur_secteurs (acquereur_id, secteur_id) VALUES (%s,%s)",
+                                    (new_id, sect_map[s]))
+                    conn.commit(); cur.close()
                     st.success("✅ Acquéreur ajouté !")
                     refresh()
                 except Exception as e:
-                    conn.rollback()
-                    st.error(f"Erreur : {e}")
+                    conn.rollback(); st.error(f"Erreur : {e}")
                 finally:
                     release_conn(conn)
 
@@ -399,24 +290,16 @@ with tab2:
         for _, r in df.iterrows():
             ch_min = pd.to_numeric(r["nombre_chambres"], errors="coerce")
             ch_max = pd.to_numeric(r["nombre_chambres_max"], errors="coerce")
-            ch_txt = (
-                f"{int(ch_min)} à {int(ch_max)} ch."
-                if pd.notna(ch_max) and ch_max != ch_min
-                else (f"{int(ch_min)} ch." if pd.notna(ch_min) else "—")
-            )
-            label = f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''} — {r['secteurs']} | {int(r['budget']):,} € | {ch_txt}".strip()
+            ch_txt = f"{int(ch_min)} à {int(ch_max)} ch." if pd.notna(ch_max) and ch_max != ch_min else (f"{int(ch_min)} ch." if pd.notna(ch_min) else "—")
+            label  = f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''} — {r['secteurs']} | {int(r['budget']):,} € | {ch_txt}".strip()
             opts[label] = r["id"]
 
-        sel = st.selectbox(
-            "Acquéreur à supprimer", ["Choisir un acquéreur"] + list(opts.keys())
-        )
+        sel    = st.selectbox("Acquéreur à supprimer", ["Choisir un acquéreur"] + list(opts.keys()))
         acq_id = None if sel == "Choisir un acquéreur" else opts[sel]
 
         if st.button("🗑️ Supprimer", type="primary"):
-            if not acq_id:
-                st.error("Veuillez choisir un acquéreur.")
-            else:
-                st.session_state["confirm_delete"] = acq_id
+            if not acq_id: st.error("Veuillez choisir un acquéreur.")
+            else: st.session_state["confirm_delete"] = acq_id
 
         if acq_id and st.session_state.get("confirm_delete") == acq_id:
             st.warning(f"⚠️ Confirmer la suppression de : **{sel}** ?")
@@ -427,14 +310,12 @@ with tab2:
                     try:
                         cur = conn.cursor()
                         cur.execute("DELETE FROM biens WHERE id = %s", (acq_id,))
-                        conn.commit()
-                        cur.close()
+                        conn.commit(); cur.close()
                         st.session_state["confirm_delete"] = None
                         st.success("✅ Acquéreur supprimé !")
                         refresh()
                     except Exception as e:
-                        conn.rollback()
-                        st.error(f"Erreur : {e}")
+                        conn.rollback(); st.error(f"Erreur : {e}")
                     finally:
                         release_conn(conn)
             with cn:
@@ -446,98 +327,67 @@ with tab2:
 # ── Gérer les secteurs ─────────────────────────────────────────────────────────
 with tab3:
     st.markdown("**Secteurs existants**")
-    st.dataframe(
-        secteurs_df[["nom"]].rename(columns={"nom": "Nom"}),
-        use_container_width=True,
-        hide_index=True,
-    )
+    st.dataframe(secteurs_df[["nom"]].rename(columns={"nom": "Nom"}),
+                 use_container_width=True, hide_index=True)
 
     st.markdown("**Ajouter un secteur**")
     with st.form("add_secteur", clear_on_submit=True):
         nom_new = st.text_input("Nom *", placeholder="Ex : Centre-ville…")
         if st.form_submit_button("✅ Ajouter", use_container_width=True):
-            if not nom_new.strip():
-                st.error("Le nom est obligatoire.")
+            if not nom_new.strip(): st.error("Le nom est obligatoire.")
             else:
                 conn = get_conn()
                 try:
                     cur = conn.cursor()
-                    cur.execute(
-                        "INSERT INTO secteurs (nom) VALUES (%s)", (nom_new.strip(),)
-                    )
-                    conn.commit()
-                    cur.close()
+                    cur.execute("INSERT INTO secteurs (nom) VALUES (%s)", (nom_new.strip(),))
+                    conn.commit(); cur.close()
                     st.success(f"✅ Secteur « {nom_new} » ajouté !")
                     refresh()
                 except Exception as e:
-                    conn.rollback()
-                    st.error(f"Erreur : {e}")
+                    conn.rollback(); st.error(f"Erreur : {e}")
                 finally:
                     release_conn(conn)
 
     st.markdown("**Supprimer un secteur**")
     if len(secteurs_df) > 0:
-        sect_del_map = dict(zip(secteurs_df["nom"], secteurs_df["id"]))
-        sect_del_name = st.selectbox(
-            "Secteur à supprimer",
-            ["Choisir un secteur"] + list(sect_del_map.keys()),
-            key="sect_del",
-        )
+        sect_del_map  = dict(zip(secteurs_df["nom"], secteurs_df["id"]))
+        sect_del_name = st.selectbox("Secteur à supprimer",
+                                     ["Choisir un secteur"] + list(sect_del_map.keys()), key="sect_del")
 
         if st.button("🗑️ Supprimer le secteur", type="primary"):
-            if sect_del_name == "Choisir un secteur":
-                st.error("Veuillez choisir un secteur.")
-            else:
-                st.session_state["confirm_delete_sect"] = sect_del_name
+            if sect_del_name == "Choisir un secteur": st.error("Veuillez choisir un secteur.")
+            else: st.session_state["confirm_delete_sect"] = sect_del_name
 
-        if (
-            st.session_state.get("confirm_delete_sect") == sect_del_name
-            and sect_del_name != "Choisir un secteur"
-        ):
+        if st.session_state.get("confirm_delete_sect") == sect_del_name and sect_del_name != "Choisir un secteur":
             conn = get_conn()
             try:
                 cur = conn.cursor()
-                cur.execute(
-                    "SELECT COUNT(*) FROM acquereur_secteurs WHERE secteur_id = %s",
-                    (sect_del_map[sect_del_name],),
-                )
-                acq_lies = cur.fetchone()[0]
-                cur.close()
+                cur.execute("SELECT COUNT(*) FROM acquereur_secteurs WHERE secteur_id = %s",
+                            (sect_del_map[sect_del_name],))
+                acq_lies = cur.fetchone()[0]; cur.close()
             except Exception as e:
-                acq_lies = None
-                st.error(f"Erreur : {e}")
+                acq_lies = None; st.error(f"Erreur : {e}")
             finally:
                 release_conn(conn)
 
             if acq_lies and acq_lies > 0:
-                st.error(
-                    f"❌ Impossible : {acq_lies} acquéreur(s) rattachés à « {sect_del_name} »."
-                )
+                st.error(f"❌ Impossible : {acq_lies} acquéreur(s) rattachés à « {sect_del_name} ».")
                 st.session_state["confirm_delete_sect"] = None
             elif acq_lies == 0:
-                st.warning(
-                    f"⚠️ Confirmer la suppression du secteur **{sect_del_name}** ?"
-                )
+                st.warning(f"⚠️ Confirmer la suppression du secteur **{sect_del_name}** ?")
                 cy, cn = st.columns(2)
                 with cy:
-                    if st.button(
-                        "✅ Oui, supprimer", key="yes_sect", use_container_width=True
-                    ):
+                    if st.button("✅ Oui, supprimer", key="yes_sect", use_container_width=True):
                         conn = get_conn()
                         try:
                             cur = conn.cursor()
-                            cur.execute(
-                                "DELETE FROM secteurs WHERE id = %s",
-                                (sect_del_map[sect_del_name],),
-                            )
-                            conn.commit()
-                            cur.close()
+                            cur.execute("DELETE FROM secteurs WHERE id = %s", (sect_del_map[sect_del_name],))
+                            conn.commit(); cur.close()
                             st.session_state["confirm_delete_sect"] = None
                             st.success(f"✅ Secteur « {sect_del_name} » supprimé !")
                             refresh()
                         except Exception as e:
-                            conn.rollback()
-                            st.error(f"Erreur : {e}")
+                            conn.rollback(); st.error(f"Erreur : {e}")
                         finally:
                             release_conn(conn)
                 with cn:
