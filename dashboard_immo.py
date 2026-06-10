@@ -57,18 +57,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Session state ──────────────────────────────────────────────────────────────
-for k, v in [("confirm_delete", None), ("confirm_delete_sect", None)]:
+for k, v in [("confirm_delete", None), ("confirm_delete_sect", None),
+             ("acq_sel_modif", None)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ── Pool de connexions (1 seule instance partagée) ─────────────────────────────
-# st.cache_resource = jamais recréé entre les reruns → minimise les réveils Neon
+# ── Pool de connexions ─────────────────────────────────────────────────────────
 @st.cache_resource
 def get_pool():
     return pool.ThreadedConnectionPool(
         minconn=1,
         maxconn=3,
-        dsn=st.secrets["db"]["dsn"],  # Connection string complète dans secrets.toml
+        dsn=st.secrets["db"]["dsn"],
         connect_timeout=10,
     )
 
@@ -85,9 +85,8 @@ def release_conn(conn):
         try: conn.close()
         except Exception: pass
 
-# ── Chargement données — TTL long pour limiter les requêtes BDD ────────────────
-# 1 seule requête SQL au lieu de 2 → moitié moins de réveils Neon
-@st.cache_data(ttl=600)  # Cache 10 minutes
+# ── Chargement données ─────────────────────────────────────────────────────────
+@st.cache_data(ttl=600)
 def load_all():
     conn = get_conn()
     try:
@@ -96,7 +95,8 @@ def load_all():
                 b.id, b.budget, b.nombre_chambres, b.nombre_chambres_max,
                 b.acquereur_prenom, b.acquereur_nom,
                 b.acquereur_tel, b.acquereur_mail, b.created_at,
-                COALESCE(STRING_AGG(s.nom, ', ' ORDER BY s.nom), '—') AS secteurs
+                COALESCE(STRING_AGG(s.nom, ', ' ORDER BY s.nom), '—') AS secteurs,
+                ARRAY_REMOVE(ARRAY_AGG(s.id ORDER BY s.nom), NULL) AS secteur_ids
             FROM biens b
             LEFT JOIN acquereur_secteurs acs ON acs.acquereur_id = b.id
             LEFT JOIN secteurs s ON s.id = acs.secteur_id
@@ -235,16 +235,21 @@ st.caption(f"{len(dff)} acquéreur(s) affiché(s) sur {len(df)} au total")
 # ── CRUD ───────────────────────────────────────────────────────────────────────
 st.markdown('<div class="section-title">✏️ Gestion des données</div>', unsafe_allow_html=True)
 
-tab1, tab2, tab3 = st.tabs(["➕ Ajouter un acquéreur", "🗑️ Supprimer un acquéreur", "🏙️ Gérer les secteurs"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "➕ Ajouter un acquéreur",
+    "✏️ Modifier un acquéreur",
+    "🗑️ Supprimer un acquéreur",
+    "🏙️ Gérer les secteurs",
+])
 
 # ── Ajouter ───────────────────────────────────────────────────────────────────
 with tab1:
     with st.form("add_acquereur", clear_on_submit=True):
         sect_map = dict(zip(secteurs_df["nom"], secteurs_df["id"]))
         c1, c2, c3 = st.columns(3)
-        with c1: budget_new  = st.number_input("Budget (€) *", min_value=0, step=500, value=None)
-        with c2: nb_ch_new   = st.number_input("Chambres min *", min_value=1, max_value=20, step=1, value=None)
-        with c3: nb_ch_max_new = st.number_input("Chambres max", min_value=1, max_value=20, step=1, value=None, help="Laisser vide si pas de maximum")
+        with c1: budget_new     = st.number_input("Budget (€) *", min_value=0, step=500, value=None)
+        with c2: nb_ch_new      = st.number_input("Chambres min *", min_value=1, max_value=20, step=1, value=None)
+        with c3: nb_ch_max_new  = st.number_input("Chambres max", min_value=1, max_value=20, step=1, value=None, help="Laisser vide si pas de maximum")
 
         sects_choisis = st.multiselect("Secteur(s) *", options=list(sect_map.keys()), placeholder="Choisir un ou plusieurs secteurs")
 
@@ -256,9 +261,9 @@ with tab1:
         with c7: acq_mail = st.text_input("Mail acquéreur")
 
         if st.form_submit_button("✅ Ajouter l'acquéreur", use_container_width=True):
-            if not sects_choisis:               st.error("Veuillez choisir au moins un secteur.")
-            elif not budget_new:                st.error("Le budget est obligatoire.")
-            elif not nb_ch_new:                 st.error("Le nombre de chambres minimum est obligatoire.")
+            if not sects_choisis:                             st.error("Veuillez choisir au moins un secteur.")
+            elif not budget_new:                              st.error("Le budget est obligatoire.")
+            elif not nb_ch_new:                               st.error("Le nombre de chambres minimum est obligatoire.")
             elif nb_ch_max_new and nb_ch_max_new < nb_ch_new: st.error("Le maximum doit être supérieur ou égal au minimum.")
             else:
                 conn = get_conn()
@@ -283,8 +288,109 @@ with tab1:
                 finally:
                     release_conn(conn)
 
-# ── Supprimer acquéreur ────────────────────────────────────────────────────────
+# ── Modifier ───────────────────────────────────────────────────────────────────
 with tab2:
+    if len(df) > 0:
+        sect_map = dict(zip(secteurs_df["nom"], secteurs_df["id"]))
+        sect_id_to_nom = dict(zip(secteurs_df["id"], secteurs_df["nom"]))
+
+        # Construire la liste de sélection
+        opts_modif = {"Choisir un acquéreur": None}
+        for _, r in df.iterrows():
+            ch_min = pd.to_numeric(r["nombre_chambres"], errors="coerce")
+            ch_max = pd.to_numeric(r["nombre_chambres_max"], errors="coerce")
+            ch_txt = f"{int(ch_min)} à {int(ch_max)} ch." if pd.notna(ch_max) and ch_max != ch_min else (f"{int(ch_min)} ch." if pd.notna(ch_min) else "—")
+            label  = f"{r['acquereur_prenom'] or ''} {r['acquereur_nom'] or ''} — {r['secteurs']} | {int(r['budget']):,} € | {ch_txt}".strip()
+            opts_modif[label] = r["id"]
+
+        sel_modif = st.selectbox("Acquéreur à modifier", list(opts_modif.keys()), key="sel_modif")
+        acq_id_modif = opts_modif[sel_modif]
+
+        if acq_id_modif is not None:
+            # Récupérer les données actuelles de l'acquéreur
+            row = df[df["id"] == acq_id_modif].iloc[0]
+
+            # Secteurs actuellement assignés
+            current_sect_ids = row["secteur_ids"] if row["secteur_ids"] is not None else []
+            current_sect_noms = [sect_id_to_nom[i] for i in current_sect_ids if i in sect_id_to_nom]
+
+            st.info(f"📝 Modification de : **{sel_modif}**")
+
+            with st.form("edit_acquereur", clear_on_submit=False):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    budget_edit = st.number_input(
+                        "Budget (€) *", min_value=0, step=500,
+                        value=int(row["budget"]) if pd.notna(row["budget"]) else None
+                    )
+                with c2:
+                    nb_ch_edit = st.number_input(
+                        "Chambres min *", min_value=1, max_value=20, step=1,
+                        value=int(row["nombre_chambres"]) if pd.notna(row["nombre_chambres"]) else None
+                    )
+                with c3:
+                    nb_ch_max_edit = st.number_input(
+                        "Chambres max", min_value=1, max_value=20, step=1,
+                        value=int(row["nombre_chambres_max"]) if pd.notna(row["nombre_chambres_max"]) else None,
+                        help="Laisser vide si pas de maximum"
+                    )
+
+                sects_edit = st.multiselect(
+                    "Secteur(s) *",
+                    options=list(sect_map.keys()),
+                    default=current_sect_noms,
+                )
+
+                c4, c5 = st.columns(2)
+                with c4:
+                    prenom_edit = st.text_input("Prénom", value=row["acquereur_prenom"] or "")
+                with c5:
+                    nom_edit = st.text_input("Nom", value=row["acquereur_nom"] or "")
+
+                c6, c7 = st.columns(2)
+                with c6:
+                    tel_edit  = st.text_input("Téléphone", value=row["acquereur_tel"] or "")
+                with c7:
+                    mail_edit = st.text_input("Mail", value=row["acquereur_mail"] or "")
+
+                if st.form_submit_button("💾 Enregistrer les modifications", use_container_width=True):
+                    if not sects_edit:                              st.error("Veuillez choisir au moins un secteur.")
+                    elif not budget_edit:                           st.error("Le budget est obligatoire.")
+                    elif not nb_ch_edit:                            st.error("Le nombre de chambres minimum est obligatoire.")
+                    elif nb_ch_max_edit and nb_ch_max_edit < nb_ch_edit: st.error("Le maximum doit être supérieur ou égal au minimum.")
+                    else:
+                        conn = get_conn()
+                        try:
+                            cur = conn.cursor()
+                            # Mettre à jour les infos de l'acquéreur
+                            cur.execute("""UPDATE biens SET
+                                budget=%s, nombre_chambres=%s, nombre_chambres_max=%s,
+                                acquereur_prenom=%s, acquereur_nom=%s,
+                                acquereur_tel=%s, acquereur_mail=%s
+                                WHERE id=%s""",
+                                (budget_edit, nb_ch_edit, nb_ch_max_edit or None,
+                                 prenom_edit.strip() or None, nom_edit.strip() or None,
+                                 tel_edit.strip() or None, mail_edit.strip() or None,
+                                 acq_id_modif))
+                            # Mettre à jour les secteurs : supprimer les anciens, insérer les nouveaux
+                            cur.execute("DELETE FROM acquereur_secteurs WHERE acquereur_id=%s", (acq_id_modif,))
+                            for s in sects_edit:
+                                cur.execute("INSERT INTO acquereur_secteurs (acquereur_id, secteur_id) VALUES (%s,%s)",
+                                            (acq_id_modif, sect_map[s]))
+                            conn.commit(); cur.close()
+                            st.success("✅ Acquéreur modifié avec succès !")
+                            refresh()
+                        except Exception as e:
+                            conn.rollback(); st.error(f"Erreur : {e}")
+                        finally:
+                            release_conn(conn)
+        else:
+            st.info("Sélectionne un acquéreur dans la liste pour le modifier.")
+    else:
+        st.info("Aucun acquéreur en base.")
+
+# ── Supprimer acquéreur ────────────────────────────────────────────────────────
+with tab3:
     if len(df) > 0:
         opts = {}
         for _, r in df.iterrows():
@@ -325,7 +431,7 @@ with tab2:
         st.info("Aucun acquéreur en base.")
 
 # ── Gérer les secteurs ─────────────────────────────────────────────────────────
-with tab3:
+with tab4:
     st.markdown("**Secteurs existants**")
     st.dataframe(secteurs_df[["nom"]].rename(columns={"nom": "Nom"}),
                  use_container_width=True, hide_index=True)
@@ -347,6 +453,36 @@ with tab3:
                     conn.rollback(); st.error(f"Erreur : {e}")
                 finally:
                     release_conn(conn)
+
+    st.markdown("**Modifier un secteur**")
+    if len(secteurs_df) > 0:
+        sect_edit_map  = dict(zip(secteurs_df["nom"], secteurs_df["id"]))
+        sect_edit_name = st.selectbox("Secteur à modifier",
+                                      ["Choisir un secteur"] + list(sect_edit_map.keys()),
+                                      key="sect_edit")
+        if sect_edit_name != "Choisir un secteur":
+            with st.form("edit_secteur", clear_on_submit=True):
+                nouveau_nom = st.text_input("Nouveau nom *", value=sect_edit_name)
+                if st.form_submit_button("💾 Renommer", use_container_width=True):
+                    if not nouveau_nom.strip():
+                        st.error("Le nom est obligatoire.")
+                    elif nouveau_nom.strip() == sect_edit_name:
+                        st.warning("Le nom est identique à l'actuel.")
+                    else:
+                        conn = get_conn()
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("UPDATE secteurs SET nom=%s WHERE id=%s",
+                                        (nouveau_nom.strip(), sect_edit_map[sect_edit_name]))
+                            conn.commit(); cur.close()
+                            st.success(f"✅ Secteur renommé en « {nouveau_nom} » !")
+                            refresh()
+                        except Exception as e:
+                            conn.rollback(); st.error(f"Erreur : {e}")
+                        finally:
+                            release_conn(conn)
+    else:
+        st.info("Aucun secteur à modifier.")
 
     st.markdown("**Supprimer un secteur**")
     if len(secteurs_df) > 0:
