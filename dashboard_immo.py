@@ -87,8 +87,7 @@ def release_conn(conn):
 # ── Chargement données ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=600)
 def load_all():
-    conn = get_conn()
-    try:
+    with db_conn() as conn:
         biens = pd.read_sql("""
             SELECT
                 b.id, b.budget, b.nombre_chambres, b.nombre_chambres_max,
@@ -106,8 +105,6 @@ def load_all():
         """, conn)
         secteurs = pd.read_sql("SELECT id, nom FROM secteurs ORDER BY nom", conn)
         return biens, secteurs
-    finally:
-        release_conn(conn)
 
 def refresh():
     load_all.clear()
@@ -265,27 +262,25 @@ with tab1:
             elif not nb_ch_new:                               st.error("Le nombre de chambres minimum est obligatoire.")
             elif nb_ch_max_new and nb_ch_max_new < nb_ch_new: st.error("Le maximum doit être supérieur ou égal au minimum.")
             else:
-                conn = get_conn()
                 try:
-                    cur = conn.cursor()
-                    cur.execute("""INSERT INTO biens
-                        (budget, nombre_chambres, nombre_chambres_max,
-                         acquereur_prenom, acquereur_nom, acquereur_tel, acquereur_mail)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                        (budget_new, nb_ch_new, nb_ch_max_new or None,
-                         acq_prenom.strip() or None, acq_nom.strip() or None,
-                         acq_tel.strip() or None, acq_mail.strip() or None))
-                    new_id = cur.fetchone()[0]
-                    for s in sects_choisis:
-                        cur.execute("INSERT INTO acquereur_secteurs (acquereur_id, secteur_id) VALUES (%s,%s)",
-                                    (new_id, sect_map[s]))
-                    conn.commit(); cur.close()
+                    with db_conn() as conn:
+                        cur = conn.cursor()
+                        cur.execute("""INSERT INTO biens
+                            (budget, nombre_chambres, nombre_chambres_max,
+                             acquereur_prenom, acquereur_nom, acquereur_tel, acquereur_mail)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                            (budget_new, nb_ch_new, nb_ch_max_new or None,
+                             acq_prenom.strip() or None, acq_nom.strip() or None,
+                             acq_tel.strip() or None, acq_mail.strip() or None))
+                        new_id = cur.fetchone()[0]
+                        for s in sects_choisis:
+                            cur.execute("INSERT INTO acquereur_secteurs (acquereur_id, secteur_id) VALUES (%s,%s)",
+                                        (new_id, sect_map[s]))
+                        conn.commit(); cur.close()
                     st.success("✅ Acquéreur ajouté !")
                     refresh()
                 except Exception as e:
-                    conn.rollback(); st.error(f"Erreur : {e}")
-                finally:
-                    release_conn(conn)
+                    st.error(f"Erreur : {e}")
 
 # ── Modifier ───────────────────────────────────────────────────────────────────
 with tab2:
@@ -358,31 +353,27 @@ with tab2:
                     elif not nb_ch_edit:                            st.error("Le nombre de chambres minimum est obligatoire.")
                     elif nb_ch_max_edit and nb_ch_max_edit < nb_ch_edit: st.error("Le maximum doit être supérieur ou égal au minimum.")
                     else:
-                        conn = get_conn()
                         try:
-                            cur = conn.cursor()
-                            # Mettre à jour les infos de l'acquéreur
-                            cur.execute("""UPDATE biens SET
-                                budget=%s, nombre_chambres=%s, nombre_chambres_max=%s,
-                                acquereur_prenom=%s, acquereur_nom=%s,
-                                acquereur_tel=%s, acquereur_mail=%s
-                                WHERE id=%s""",
-                                (budget_edit, nb_ch_edit, nb_ch_max_edit or None,
-                                 prenom_edit.strip() or None, nom_edit.strip() or None,
-                                 tel_edit.strip() or None, mail_edit.strip() or None,
-                                 acq_id_modif))
-                            # Mettre à jour les secteurs : supprimer les anciens, insérer les nouveaux
-                            cur.execute("DELETE FROM acquereur_secteurs WHERE acquereur_id=%s", (acq_id_modif,))
-                            for s in sects_edit:
-                                cur.execute("INSERT INTO acquereur_secteurs (acquereur_id, secteur_id) VALUES (%s,%s)",
-                                            (acq_id_modif, sect_map[s]))
-                            conn.commit(); cur.close()
+                            with db_conn() as conn:
+                                cur = conn.cursor()
+                                cur.execute("""UPDATE biens SET
+                                    budget=%s, nombre_chambres=%s, nombre_chambres_max=%s,
+                                    acquereur_prenom=%s, acquereur_nom=%s,
+                                    acquereur_tel=%s, acquereur_mail=%s
+                                    WHERE id=%s""",
+                                    (budget_edit, nb_ch_edit, nb_ch_max_edit or None,
+                                     prenom_edit.strip() or None, nom_edit.strip() or None,
+                                     tel_edit.strip() or None, mail_edit.strip() or None,
+                                     acq_id_modif))
+                                cur.execute("DELETE FROM acquereur_secteurs WHERE acquereur_id=%s", (acq_id_modif,))
+                                for s in sects_edit:
+                                    cur.execute("INSERT INTO acquereur_secteurs (acquereur_id, secteur_id) VALUES (%s,%s)",
+                                                (acq_id_modif, sect_map[s]))
+                                conn.commit(); cur.close()
                             st.success("✅ Acquéreur modifié avec succès !")
                             refresh()
                         except Exception as e:
-                            conn.rollback(); st.error(f"Erreur : {e}")
-                        finally:
-                            release_conn(conn)
+                            st.error(f"Erreur : {e}")
         else:
             st.info("Sélectionne un acquéreur dans la liste pour le modifier.")
     else:
@@ -411,18 +402,16 @@ with tab3:
             cy, cn = st.columns(2)
             with cy:
                 if st.button("✅ Oui, supprimer", use_container_width=True):
-                    conn = get_conn()
                     try:
-                        cur = conn.cursor()
-                        cur.execute("DELETE FROM biens WHERE id = %s", (acq_id,))
-                        conn.commit(); cur.close()
+                        with db_conn() as conn:
+                            cur = conn.cursor()
+                            cur.execute("DELETE FROM biens WHERE id = %s", (acq_id,))
+                            conn.commit(); cur.close()
                         st.session_state["confirm_delete"] = None
                         st.success("✅ Acquéreur supprimé !")
                         refresh()
                     except Exception as e:
-                        conn.rollback(); st.error(f"Erreur : {e}")
-                    finally:
-                        release_conn(conn)
+                        st.error(f"Erreur : {e}")
             with cn:
                 if st.button("❌ Annuler", use_container_width=True):
                     st.session_state["confirm_delete"] = None
@@ -441,17 +430,15 @@ with tab4:
         if st.form_submit_button("✅ Ajouter", use_container_width=True):
             if not nom_new.strip(): st.error("Le nom est obligatoire.")
             else:
-                conn = get_conn()
                 try:
-                    cur = conn.cursor()
-                    cur.execute("INSERT INTO secteurs (nom) VALUES (%s)", (nom_new.strip(),))
-                    conn.commit(); cur.close()
+                    with db_conn() as conn:
+                        cur = conn.cursor()
+                        cur.execute("INSERT INTO secteurs (nom) VALUES (%s)", (nom_new.strip(),))
+                        conn.commit(); cur.close()
                     st.success(f"✅ Secteur « {nom_new} » ajouté !")
                     refresh()
                 except Exception as e:
-                    conn.rollback(); st.error(f"Erreur : {e}")
-                finally:
-                    release_conn(conn)
+                    st.error(f"Erreur : {e}")
 
     st.markdown("**Modifier un secteur**")
     if len(secteurs_df) > 0:
@@ -468,18 +455,16 @@ with tab4:
                     elif nouveau_nom.strip() == sect_edit_name:
                         st.warning("Le nom est identique à l'actuel.")
                     else:
-                        conn = get_conn()
                         try:
-                            cur = conn.cursor()
-                            cur.execute("UPDATE secteurs SET nom=%s WHERE id=%s",
-                                        (nouveau_nom.strip(), sect_edit_map[sect_edit_name]))
-                            conn.commit(); cur.close()
+                            with db_conn() as conn:
+                                cur = conn.cursor()
+                                cur.execute("UPDATE secteurs SET nom=%s WHERE id=%s",
+                                            (nouveau_nom.strip(), sect_edit_map[sect_edit_name]))
+                                conn.commit(); cur.close()
                             st.success(f"✅ Secteur renommé en « {nouveau_nom} » !")
                             refresh()
                         except Exception as e:
-                            conn.rollback(); st.error(f"Erreur : {e}")
-                        finally:
-                            release_conn(conn)
+                            st.error(f"Erreur : {e}")
     else:
         st.info("Aucun secteur à modifier.")
 
@@ -494,16 +479,14 @@ with tab4:
             else: st.session_state["confirm_delete_sect"] = sect_del_name
 
         if st.session_state.get("confirm_delete_sect") == sect_del_name and sect_del_name != "Choisir un secteur":
-            conn = get_conn()
             try:
-                cur = conn.cursor()
-                cur.execute("SELECT COUNT(*) FROM acquereur_secteurs WHERE secteur_id = %s",
-                            (sect_del_map[sect_del_name],))
-                acq_lies = cur.fetchone()[0]; cur.close()
+                with db_conn() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT COUNT(*) FROM acquereur_secteurs WHERE secteur_id = %s",
+                                (sect_del_map[sect_del_name],))
+                    acq_lies = cur.fetchone()[0]; cur.close()
             except Exception as e:
                 acq_lies = None; st.error(f"Erreur : {e}")
-            finally:
-                release_conn(conn)
 
             if acq_lies and acq_lies > 0:
                 st.error(f"❌ Impossible : {acq_lies} acquéreur(s) rattachés à « {sect_del_name} ».")
@@ -513,18 +496,16 @@ with tab4:
                 cy, cn = st.columns(2)
                 with cy:
                     if st.button("✅ Oui, supprimer", key="yes_sect", use_container_width=True):
-                        conn = get_conn()
                         try:
-                            cur = conn.cursor()
-                            cur.execute("DELETE FROM secteurs WHERE id = %s", (sect_del_map[sect_del_name],))
-                            conn.commit(); cur.close()
+                            with db_conn() as conn:
+                                cur = conn.cursor()
+                                cur.execute("DELETE FROM secteurs WHERE id = %s", (sect_del_map[sect_del_name],))
+                                conn.commit(); cur.close()
                             st.session_state["confirm_delete_sect"] = None
                             st.success(f"✅ Secteur « {sect_del_name} » supprimé !")
                             refresh()
                         except Exception as e:
-                            conn.rollback(); st.error(f"Erreur : {e}")
-                        finally:
-                            release_conn(conn)
+                            st.error(f"Erreur : {e}")
                 with cn:
                     if st.button("❌ Annuler", key="no_sect", use_container_width=True):
                         st.session_state["confirm_delete_sect"] = None
